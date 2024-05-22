@@ -17,12 +17,7 @@ from scipy.optimize import curve_fit
 import warnings
 import neurokit2 as nk
 import matplotlib.pyplot as plt
-#import statsmodels.api as sm
-#from skimage.restoration import denoise_wavelet
-#import pywt
-#import shutil
-#from fpdf import FPDF
-#from scipy.stats import linregress
+from copy import deepcopy
 
 
 def array_from_TDMSgroup(file_dir,group_name,log_dict=None,cuts=None,omits=False):
@@ -157,16 +152,17 @@ def butter_filter(dd, lpfc=70, lpo=3, bsfc=3, bso=3, bstfc=[4,6], bsto=2, Freqen
     lowpass=butter(lpo,lpfc,btype='low',output='sos',fs=fs)
     wavy_baseline=butter(bso,bsfc,btype='low',output='sos',fs=fs)
     b_notch, a_notch = iirnotch(Freqencytoremove, Qualityfactor, fs)
+    filtered = deepcopy(dd)
     for i in range(1,np.shape(dd)[1]):
-        dd[:,i]=filtfilt(b_notch, a_notch, dd[:,i])
-        dd[:,i]=sosfilt(lowpass,dd[:,i])
-        dd[:,i]=sosfilt(band_stop,dd[:,i])
-        dd[:,i]-=sosfilt(wavy_baseline,dd[:,i])
+        filtered[:,i]=filtfilt(b_notch, a_notch, filtered[:,i])
+        filtered[:,i]=sosfilt(lowpass,filtered[:,i])
+        filtered[:,i]=sosfilt(band_stop,filtered[:,i])
+        filtered[:,i]-=sosfilt(wavy_baseline,filtered[:,i])
         # dd[:,i]=denoise_wavelet(dd[:,i],method='BayesShrink',
         #                         mode='soft',wavelet_levels=3,
         #                         wavelet='sym8',rescale_sigma='True')
     # dd = dd[2000:12000, :]      ##we only pick 12 s of each for now
-    return dd
+    return filtered
 
 def FASTICA(dd,n_comp=None,random=0):
     if n_comp==None:
