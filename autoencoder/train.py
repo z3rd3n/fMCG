@@ -6,9 +6,10 @@ import torch.optim as optim
 from model import Encoder, Decoder
 import torch.nn as nn
 import torch.nn.functional as F
+import zarr
 
 # Assuming 'dataset' is your dataset
-dataset = np.load('data/ecg_patches.npy')
+dataset = zarr.load('data/data.zarr')
 dataset = torch.tensor(dataset, dtype=torch.float32)  # Ensure dataset is a PyTorch tensor
 
 # Define the dataset sizes
