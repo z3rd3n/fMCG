@@ -7,9 +7,12 @@ from model import Encoder, Decoder
 import torch.nn as nn
 import torch.nn.functional as F
 import zarr
+from data.tdms_to_npy import patch_matrix
+import tqdm
 
 # Assuming 'dataset' is your dataset
-dataset = zarr.load('data/data.zarr')
+dataset = patch_matrix(patch_size=1500)
+print(f"Dataset shape: {dataset.shape}")
 dataset = torch.tensor(dataset, dtype=torch.float32)  # Ensure dataset is a PyTorch tensor
 
 # Define the dataset sizes
@@ -35,7 +38,7 @@ decoder = Decoder()
 optimizer = optim.Adam(list(encod_f.parameters()) + list(encod_m.parameters()) +
                            list(decoder.parameters()), lr=0.01, weight_decay=0.001)
 
-num_epochs = 10
+num_epochs = 100
 best_val_loss = float('inf')  # Initialize best validation loss to infinity
 
 # Training loop
@@ -43,39 +46,40 @@ for epoch in range(num_epochs):
     encod_f.train()
     encod_m.train()
     decoder.train()
-    
+
     train_loss = 0.0
-    for patches in train_dataloader:
+    # Replace the regular for loop with tqdm.notebook.tqdm (for Jupyter notebooks) or tqdm.tqdm (for regular Python scripts)
+    for patches in tqdm.tqdm(train_dataloader):
         optimizer.zero_grad()
-        
+
         # Forward pass through encoders
         encoded_fetal = encod_f(patches)
         encoded_maternal = encod_m(patches)
-        
+
         # Calculate kurtosis
         k_f = calculate_kurtosis(encoded_fetal)
         k_m = calculate_kurtosis(encoded_maternal)
         kurtosis_loss = torch.mean(torch.square((torch.abs(k_m) - torch.abs(k_f))))
-        
+
         # Forward pass through decoder
         reconstructed = decoder(encoded_fetal + encoded_maternal)
-        
+
         # Calculate loss
-        loss = F.mse_loss(reconstructed, patches) - 0.1 * kurtosis_loss
-        
+        loss = F.mse_loss(reconstructed, patches) - 0.001 * kurtosis_loss
+
         # Backward pass and optimization
         loss.backward()
         optimizer.step()
-        print(loss.item())
         train_loss += loss.item()
-    
+
     # Validation step
     encod_f.eval()
     encod_m.eval()
     decoder.eval()
     val_loss = 0.0
     with torch.no_grad():
-        for patches in val_dataloader:
+        # Replace the regular for loop with tqdm.notebook.tqdm (for Jupyter notebooks) or tqdm.tqdm (for regular Python scripts)
+        for patches in tqdm.tqdm(val_dataloader):
             encoded_fetal = encod_f(patches)
             encoded_maternal = encod_m(patches)
             k_f = calculate_kurtosis(encoded_fetal)
@@ -84,21 +88,21 @@ for epoch in range(num_epochs):
             reconstructed = decoder(encoded_fetal + encoded_maternal)
             loss = F.mse_loss(reconstructed, patches) - 0.1 * kurtosis_loss
             val_loss += loss.item()
-    
+
     avg_val_loss = val_loss / len(val_dataloader)
     print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {train_loss/len(train_dataloader):.4f}, Val Loss: {avg_val_loss:.4f}')
     
-    # Check if the current validation loss is the best we've seen so far
-    if avg_val_loss < best_val_loss:
-        best_val_loss = avg_val_loss
-        # Save the model state
-        torch.save({
-            'encod_f_state_dict': encod_f.state_dict(),
-            'encod_m_state_dict': encod_m.state_dict(),
-            'decoder_state_dict': decoder.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-        }, 'best_model.pth')
-        print(f'Best model saved with validation loss: {best_val_loss:.4f}')
+    # # Check if the current validation loss is the best we've seen so far
+    # if avg_val_loss < best_val_loss:
+    #     best_val_loss = avg_val_loss
+    #     # Save the model state
+    #     torch.save({
+    #         'encod_f_state_dict': encod_f.state_dict(),
+    #         'encod_m_state_dict': encod_m.state_dict(),
+    #         'decoder_state_dict': decoder.state_dict(),
+    #         'optimizer_state_dict': optimizer.state_dict(),
+    #     }, 'best_model.pth')
+    #     print(f'Best model saved with validation loss: {best_val_loss:.4f}')
 
 # Testing step
 encod_f.eval()
