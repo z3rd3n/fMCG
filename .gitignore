@@ -1,2 +1,4 @@
 autoencoder/data/
 .fmcg_venv
+patients
+patient_ICA
