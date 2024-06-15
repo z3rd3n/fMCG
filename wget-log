@@ -1,0 +1,7 @@
+--2024-05-28 19:10:48--  https://syncandshare.lrz.de/dl/fi41nq7J4bAhxJFTJxfiXv/patch3000.npy
+Resolving syncandshare.lrz.de (syncandshare.lrz.de)... 129.187.255.213
+Connecting to syncandshare.lrz.de (syncandshare.lrz.de)|129.187.255.213|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 15406080128 (14G) [application/octet-stream]
+Saving to: ‘autoencoder/data/patch3000.npy’
+
