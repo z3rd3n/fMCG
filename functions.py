@@ -12,13 +12,13 @@ from datetime import datetime
 from nptdms import TdmsFile
 from sklearn.decomposition import FastICA as skFastICA
 from scipy.signal import butter,periodogram,sosfilt,iirnotch,filtfilt,welch,find_peaks, correlate,savgol_filter
-from scipy.stats import linregress
+from scipy.stats import linregress, kurtosis
 from scipy.optimize import curve_fit
 import warnings
 import neurokit2 as nk
 import matplotlib.pyplot as plt
 from copy import deepcopy
-
+import pywt
 
 def array_from_TDMSgroup(file_dir,group_name,log_dict=None,cuts=None,omits=False):
     tdms_file = TdmsFile.read(file_dir)
@@ -164,13 +164,236 @@ def butter_filter(dd, lpfc=70, lpo=3, bsfc=3, bso=3, bstfc=[4,6], bsto=2, Freqen
     # dd = dd[2000:12000, :]      ##we only pick 12 s of each for now
     return filtered
 
-def FASTICA(dd,n_comp=None,random=0):
-    if n_comp==None:
-        n_comp=int(np.shape(dd)[1]-1)
-    #print('Number of components Fast ICA: '+str(n_comp))
-    ica = skFastICA(n_components=n_comp,algorithm='deflation',max_iter=4000,fun='logcosh',tol=1e-5,random_state=random)
-    S_ = ica.fit_transform(dd[:,1:])
-    return S_
+def bandpass_filter(dd, order=5, low = 0.5, high = 50):
+    bandpass = butter(order, [low, high], btype='band', output='sos', fs=1000)
+    b_notch, a_notch = iirnotch(50, 40, fs=1000)
+
+    # the first channel is uncessary and the first 5000 samples are skipped for transient sensor effects
+    data = deepcopy(dd[5000:, 1:])
+    for i in range(data.shape[1]):
+        data[:,i] = sosfilt(bandpass, data[:,i])
+        data[:,i] = filtfilt(b_notch, a_notch, data[:,i])
+    return data
+
+def FASTICA(dd,n_comp=None, algo = "parallel"):
+    ica = skFastICA(n_components=n_comp,algorithm=algo,max_iter=500,fun='logcosh',tol=1e-5)
+    S_ = ica.fit_transform(dd)
+    return S_, ica
+
+from scipy.interpolate import CubicSpline
+
+def upDownSample(maternal_matrix, maternal_indices, downsample_factor_qrs=5, downsample_factor_other=20):
+
+    for index in maternal_indices:
+        candidate = maternal_matrix[:, index]
+        peak_indices, _ = find_peaks(np.abs(candidate), distance=400, prominence=2)
+        
+        # Create a mask for downsampling
+        downsample_mask = np.zeros_like(candidate, dtype=bool)
+        
+        for peak in peak_indices:
+            start_qrs = max(0, peak - 50)
+            end_qrs = min(len(candidate), peak + 50)
+            downsample_mask[start_qrs:end_qrs] = True
+        
+        # Downsample
+        downsampled_signal = []
+        indices = []
+        for i in range(len(candidate)):
+            if downsample_mask[i]:
+                if i % downsample_factor_qrs == 0:
+                    downsampled_signal.append(candidate[i])
+                    indices.append(i)
+            else:
+                if i % downsample_factor_other == 0:
+                    downsampled_signal.append(candidate[i])
+                    indices.append(i)
+        
+        # Convert to numpy arrays
+        downsampled_signal = np.array(downsampled_signal)
+        indices = np.array(indices)
+        
+        # Perform cubic spline interpolation
+        cs = CubicSpline(indices, downsampled_signal)
+        upsampled_signal = cs(np.arange(len(candidate)))
+        
+        # Replace the original signal with the upsampled signal
+        maternal_matrix[:, index] = upsampled_signal
+    
+    return maternal_matrix
+
+def plotICA(sources, ica = None, kurt_threshold=2, offset=10000, span=3000, fs=1000, mse_th=1):
+    kurtosis_values = [kurtosis(sources[:, j]) for j in range(sources.shape[1])]
+    kurt_list = [j for j, kurt in enumerate(kurtosis_values) if kurt_threshold < kurt < 200]
+    channels_to_plot = []
+    for chan in kurt_list:
+        signal = sources[offset:offset+span, chan]
+        peaks, _ = find_peaks(np.abs(signal), distance=400, prominence=2)
+        peak_heights = signal[peaks]
+        mean_height = np.mean(peak_heights)
+        mse = np.mean((peak_heights - mean_height)**2)
+        
+        # Normalize MSE by the square of the mean height to make it scale-invariant
+        normalized_mse = mse / (mean_height**2)
+        
+        # Check if normalized MSE is below threshold (smaller is better)
+        if normalized_mse < mse_th:
+            channels_to_plot.append(chan)
+    
+    fig, axes = plt.subplots(len(channels_to_plot), 1, sharex=True, 
+                             figsize=(12, 2 * len(channels_to_plot)), dpi=150)
+    fig.subplots_adjust(hspace=0.3)
+    
+    if len(channels_to_plot) == 1:
+        axes = [axes]
+    
+    maxPeaks = 0
+    compF = -1
+    for i, j in enumerate(channels_to_plot):
+        signal = sources[offset:offset+span, j]
+        peaks, _ = find_peaks(np.abs(signal), distance=400, prominence=2)
+        if len(peaks) > maxPeaks:
+            maxPeaks = len(peaks)
+            compF = j
+        
+        axes[i].plot(np.arange(span) / fs, signal, label=f'Channel {j}')
+        axes[i].plot(peaks / fs, signal[peaks], "rx", markersize=8)
+        axes[i].set_ylabel('Amplitude')
+        axes[i].legend(loc='upper right')
+        axes[i].text(0.02, 0.95, f'Kurtosis: {kurtosis_values[j]:.2f}\nPeaks: {len(peaks)}', 
+                     transform=axes[i].transAxes, verticalalignment='top', 
+                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+        axes[i].grid(True, linestyle='--', alpha=0.7)
+    
+    axes[-1].set_xlabel('Time [s]')
+    params = ica.get_params()
+    plt.suptitle(f'ICA {len(channels_to_plot)} channels with kurtosis > {kurt_threshold}, algo:{params['algorithm']}, comps:{params['n_components']}', fontsize=16)
+
+    
+    plt.tight_layout()
+    plt.show()
+    return compF, channels_to_plot
+
+def wavelet_denoise(averaged_waveform, wavelet='db4', level=5):
+    coeffs = pywt.wavedec(averaged_waveform, wavelet, level=level)
+    coeffs[1:] = [pywt.threshold(c, value=0.7, mode='soft') for c in coeffs[1:]]
+    return pywt.waverec(coeffs, wavelet)
+
+def identify_hr_range_segments(heart_rates, min_hr, max_hr, plot=False, min_segment_length=5):
+    range_segments = []
+    start_index = None
+    
+    for i, hr in enumerate(heart_rates):
+        if min_hr <= hr <= max_hr:
+            if start_index is None:
+                start_index = i
+        else:
+            if start_index is not None:
+                if i - start_index >= min_segment_length:
+                    range_segments.append((start_index, i))
+                start_index = None
+    
+    # Check if the last segment extends to the end
+    if start_index is not None and len(heart_rates) - start_index >= min_segment_length:
+        range_segments.append((start_index, len(heart_rates)))
+    if plot:
+        plt.figure(figsize=(15, 6))
+        plt.plot(heart_rates, 'b-', label='Heart Rate')
+        for start, end in range_segments:
+            plt.axvspan(start, end, color='green', alpha=0.3)
+        plt.axhline(y=60, color='r', linestyle='--', label='Min HR')
+        plt.axhline(y=150, color='r', linestyle='--', label='Max HR')
+        plt.title(f"Heart Rate with {min_hr}-{max_hr} BPM Range Segments Highlighted")
+        plt.xlabel("Beat Number")
+        plt.ylabel("Heart Rate (BPM)")
+        plt.legend()
+        plt.show()
+    return range_segments
+
+def __avg_hr_range(data, peaks, heart_rates, window_size, min_hr=0, max_hr=200):
+    half_window = window_size // 2
+    range_segments = identify_hr_range_segments(heart_rates, min_hr, max_hr)
+    
+    summed_waveforms = []
+    for start, end in range_segments:
+        segment_peaks = peaks[start:end]
+        for peak in segment_peaks:
+            if peak - half_window < 0 or peak + half_window >= len(data):
+                continue
+            window = data[peak - half_window : peak + half_window]
+            summed_waveforms.append(window)
+    
+    if not summed_waveforms:
+        return None
+    
+    averaged_waveform = np.mean(summed_waveforms, axis=0)
+    return averaged_waveform
+
+def avg_channels_hr_range(data, peaks, heart_rates, window_size, denoise=False, plot=False, min_hr=0, max_hr=200):
+    if plot:
+        plt.figure(figsize=[20,10])
+
+    for ch in range(1, data.shape[1]):
+        averaged_waveform = __avg_hr_range(data[:, ch], peaks, heart_rates, window_size=1200, min_hr=min_hr, max_hr=max_hr)
+        if denoise:
+            averaged_waveform = wavelet_denoise(averaged_waveform)
+        if averaged_waveform is not None and plot:
+            plt.plot(averaged_waveform, color='k')
+    if plot:
+        plt.title(f"Averaged Waveform from Heart Rate Range {min_hr}-{max_hr} BPM")
+        plt.xlabel("Time")
+        plt.ylabel("Amplitude")
+        plt.show()
+    return averaged_waveform
+
+def plotHR(signal, h=2, d=400, fs=1000, minBpm=-1, maxBpm=-1):
+    # Find all peaks
+    peaks, _ = find_peaks(np.abs(signal), prominence=h, distance=d)
+    
+    # Calculate intervals and heart rates for all peaks
+    all_intervals = np.diff(peaks) / fs
+    heart_rates = 60 / all_intervals
+    
+    # Filter peaks based on heart rate criteria
+    if (minBpm != -1 and maxBpm != -1):
+        valid_indices = np.where((heart_rates >= minBpm) & (heart_rates <= maxBpm))[0]
+        peaks = peaks[:-1][valid_indices]  # Exclude the last peak as it doesn't have a corresponding interval
+        heart_rates = heart_rates[valid_indices]
+    
+    avg = np.mean(heart_rates)
+    
+    # Create the plot
+    plt.figure(figsize=(12, 6))
+    
+    # Plot vertical lines
+    x_positions = np.arange(len(heart_rates))
+    plt.vlines(x_positions, ymin=0, ymax=heart_rates, colors='b', linewidth=1)
+    
+    # Customize the plot
+    plt.xlabel('Beat Number')
+    plt.ylabel(f'Heart Rate (BPM)')
+    plt.title(f'Heart Rate avg = {avg:.2f} - Fetal')
+    plt.grid(True, linestyle='--', alpha=0.9)
+    
+    num_ticks = 30  # Adjust this number to control how many ticks you want
+    tick_locations = np.linspace(0, len(heart_rates) - 1, num_ticks, dtype=int)
+    plt.xticks(tick_locations, tick_locations)
+    plt.yticks(np.linspace(60, 150, 20, dtype=int), np.linspace(60, 150, 20, dtype=int))
+    
+    # Set y-axis to start from 100
+    plt.ylim(bottom=60)
+    
+    # Add markers at the top of each line
+    plt.plot(x_positions, heart_rates, 'ro', markersize=2)
+    
+    # Plot all data points (they're all between minBpm and maxBpm now)
+    plt.plot(x_positions, heart_rates, 'go', markersize=4, label='Between Min and Max BPM')
+    
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+    
+    return heart_rates, peaks
 
 def RR2BPM(RR):
     return 6e4/(RR+1e-10)
@@ -198,7 +421,6 @@ def waveform_plot(container, time_axis, add_lines=None, sideplot=None, savename=
         secaxb.set_xlabel('BPM')
         secaxb.set_xticks(ticks=[200,150,120,100,80,75,60])
         bx.axvline(x=RR, color='r',linestyle='dashed')
-        bx.text(RR*1.05,np.max(yy)*0.9,'RR: %i $\pm$ %i'% (int(RR),int(sigma_RR)),color='r')
         bx.set_xlabel('RR [ms]')
         bx.set_xlim([300,1000])
         bx.text(700,np.max(yy)*0.85,'# Peaks: %i' % (int(np.sum(yy))))
@@ -211,11 +433,11 @@ def waveform_plot(container, time_axis, add_lines=None, sideplot=None, savename=
     x = time_axis
     container = container.T  # Transpose if necessary
     for j in range(container.shape[0]):
-        ax.plot(x, container[j, :], color='b', alpha=0.05, lw=1)
+        ax.plot(x, container[j, :], color='k', alpha=0.05, lw=1)
     
     if add_lines is not None:
         ax.plot(x, add_lines[0], color='r', label='AVGs')
-        ax.plot(x, add_lines[1]/np.std(add_lines[1])*np.std(add_lines[0]), color='k', label='Bispectral Filters')
+        ax.plot(x, add_lines[1]/np.std(add_lines[1])*np.std(add_lines[0]), color='b', label='Bispectral Filters')
         if len(add_lines) == 3:
             ax.plot(x, add_lines[2], color='g', label='Theory')
         ax.legend(loc='upper right')
