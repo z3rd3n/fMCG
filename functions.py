@@ -272,7 +272,9 @@ def plotICA(sources, ica = None, kurt_threshold=2, offset=10000, span=3000, fs=1
     
     plt.tight_layout()
     plt.show()
-    return compF, channels_to_plot
+    maternals = deepcopy(channels_to_plot)
+    maternals.remove(compF)
+    return compF, maternals
 
 def wavelet_denoise(averaged_waveform, wavelet='db4', level=5):
     coeffs = pywt.wavedec(averaged_waveform, wavelet, level=level)
@@ -301,8 +303,8 @@ def identify_hr_range_segments(heart_rates, min_hr, max_hr, plot=False, min_segm
         plt.plot(heart_rates, 'b-', label='Heart Rate')
         for start, end in range_segments:
             plt.axvspan(start, end, color='green', alpha=0.3)
-        plt.axhline(y=60, color='r', linestyle='--', label='Min HR')
-        plt.axhline(y=150, color='r', linestyle='--', label='Max HR')
+        plt.axhline(y=min_hr, color='r', linestyle='--', label='Min HR')
+        plt.axhline(y=max_hr, color='r', linestyle='--', label='Max HR')
         plt.title(f"Heart Rate with {min_hr}-{max_hr} BPM Range Segments Highlighted")
         plt.xlabel("Beat Number")
         plt.ylabel("Heart Rate (BPM)")
@@ -310,9 +312,9 @@ def identify_hr_range_segments(heart_rates, min_hr, max_hr, plot=False, min_segm
         plt.show()
     return range_segments
 
-def __avg_hr_range(data, peaks, heart_rates, window_size, min_hr=0, max_hr=200):
+def __avg_hr_range(data, peaks, heart_rates, window_size, min_hr=0, max_hr=200, s_length=5):
     half_window = window_size // 2
-    range_segments = identify_hr_range_segments(heart_rates, min_hr, max_hr)
+    range_segments = identify_hr_range_segments(heart_rates, min_hr, max_hr, min_segment_length=s_length)
     
     summed_waveforms = []
     for start, end in range_segments:
@@ -329,12 +331,12 @@ def __avg_hr_range(data, peaks, heart_rates, window_size, min_hr=0, max_hr=200):
     averaged_waveform = np.mean(summed_waveforms, axis=0)
     return averaged_waveform
 
-def avg_channels_hr_range(data, peaks, heart_rates, window_size, denoise=False, plot=False, min_hr=0, max_hr=200):
+def avg_channels_hr_range(data, peaks, heart_rates, window_size, denoise=False, plot=False, min_hr=0, max_hr=200, segment_length=5):
     if plot:
         plt.figure(figsize=[20,10])
 
     for ch in range(1, data.shape[1]):
-        averaged_waveform = __avg_hr_range(data[:, ch], peaks, heart_rates, window_size=1200, min_hr=min_hr, max_hr=max_hr)
+        averaged_waveform = __avg_hr_range(data[:, ch], peaks, heart_rates, window_size=window_size, min_hr=min_hr, max_hr=max_hr, s_length = segment_length)
         if denoise:
             averaged_waveform = wavelet_denoise(averaged_waveform)
         if averaged_waveform is not None and plot:
