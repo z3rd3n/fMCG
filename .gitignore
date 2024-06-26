@@ -2,3 +2,4 @@ autoencoder/data/
 .fmcg_venv
 patients
 patient_ICA
+patients/P044/P044_S01_D2024-04-18_G36.tdms
