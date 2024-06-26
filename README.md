@@ -1,3 +1,12 @@
+## repository directories
+### [average_notebooks: Averaging in temporal domain notebooks](./average_notebooks/)
+- These notebooks first do ICA and calculate the heart beats, then from the calculated peak locations they do averaging on the raw data
+### [hosd_python: Higher Order Spectral (HOS) Filtering python code](./hosd_python/)
+- This folder contains the python codes for HOS, priorly used in MATLAB
+### [matlab_analysis: HOS in MATLAB code (more detailed functions)](./matlab_analysis/)
+### [notebooks: Notebooks for readind data, importance of butter filtering etc.](./notebooks/)
+### [notebooks_freq: some STFT analysis (not complete and unnecessary)](./notebooks_freq/)
+
 ### System Setup
 In the given fMCG setup, we have 16 sensors. Most sensors have 2 channels measuring in different
 directions (y and z-axis) excluding one or two with 3 channels. In total, 32 channels are present. Since
